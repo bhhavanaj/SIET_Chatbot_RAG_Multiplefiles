@@ -5,14 +5,11 @@ st.title("SIET-Chatbot")
 st.caption("Ask anything about college information,course info,rules,FAQS,placement info")
 st.caption("RAG Pipeline with multiple files")
 st.caption("Launched by BHAVANA J")
-
-my_key = st.secrets["GROQ_API_KEY"]
-
 @st.cache_resource
 def initiate_rag():
   return load_base("college_docs")
 
-index, embed_model, chunks = initialize_rag()
+index, embed_model, chunks = initiate_rag()
 if "chat_hist" not in st.session_state:   #load and display chat history if exsit if not create new
   st.session_state.chat_hist =[]
 
