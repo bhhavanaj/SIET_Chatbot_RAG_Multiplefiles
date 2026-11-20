@@ -7,25 +7,22 @@ from sentence_transformers import SentenceTransformer
 from pathlib import Path
 
 
+# Load PDF
 def load_pdf(pdf_path):
     reader = PdfReader(str(pdf_path))
-
     mypages = [page.extract_text() or "" for page in reader.pages]
-
     full_text = "\n".join(mypages).strip()
 
     if not full_text:
-        raise ValueError("No readable text found")
+        raise ValueError(f"No readable text found in {pdf_path}")
 
     return full_text
 
 
+# Create text chunks
 def create_chunks(full_text, chunksize=500, overlap=100):
     chunks = []
     start = 0
-
-    if chunksize <= 0 or overlap < 0 or overlap >= chunksize:
-        raise ValueError("Invalid chunksize or overlap")
 
     while start < len(full_text):
         end = start + chunksize
@@ -39,11 +36,8 @@ def create_chunks(full_text, chunksize=500, overlap=100):
     return chunks
 
 
+# Build vectors
 def build_vectors(chunks, model_name="all-MiniLM-L6-v2"):
-
-    if not chunks:
-        raise ValueError("Cannot apply embeddings without chunks")
-
     embed_model = SentenceTransformer(model_name)
 
     embed_vectors = embed_model.encode(
@@ -56,50 +50,44 @@ def build_vectors(chunks, model_name="all-MiniLM-L6-v2"):
     faiss.normalize_L2(embed_vectors)
 
     index = faiss.IndexFlatIP(embed_vectors.shape[1])
-
     index.add(embed_vectors)
 
     return index, embed_model
 
 
+# Load multiple PDFs
 def load_base(pdf_path="college_docs"):
-
-    chunks = []
-
-    pdf_folder = Path(pdf_path)
+    pdf_folder = Path(__file__).resolve().parent / pdf_path
 
     if not pdf_folder.exists():
-        raise FileNotFoundError("college_docs folder not found")
+        raise ValueError("college_docs folder not found")
 
-    pdf_files = sorted(pdf_folder.glob("*.pdf"))
+    pdf_files = [
+        file for file in pdf_folder.iterdir()
+        if file.is_file() and file.suffix.lower() == ".pdf"
+    ]
 
     if not pdf_files:
         raise ValueError("No PDF files found in college_docs folder")
 
-    for pdf in pdf_files:
+    chunks = []
 
+    for pdf in sorted(pdf_files):
         full_text = load_pdf(pdf)
-
         chunks.extend(create_chunks(full_text))
+
+    if not chunks:
+        raise ValueError("No text chunks created from PDFs")
 
     index, embed_model = build_vectors(chunks)
 
     return index, embed_model, chunks
 
 
-def retrieve_content(
-    question,
-    embed_model,
-    chunks,
-    index,
-    num_chunks=3
-):
-
+# Retrieve relevant content
+def retrieve_content(question, embed_model, chunks, index, num_chunks=3):
     if not question.strip():
-        raise ValueError("Question cannot be blank")
-
-    if num_chunks < 1:
-        raise ValueError("Request at least one chunk")
+        return ""
 
     if index.ntotal == 0:
         return ""
@@ -110,7 +98,6 @@ def retrieve_content(
     )
 
     query_embed = np.asarray(query_embed, dtype="float32")
-
     faiss.normalize_L2(query_embed)
 
     sim_scores, vec_indices = index.search(
@@ -127,6 +114,7 @@ def retrieve_content(
     return background
 
 
+# Generate answer using Groq
 def ask_rag(
     question,
     embed_model,
@@ -136,9 +124,8 @@ def ask_rag(
     num_chunks=3,
     model_name="openai/gpt-oss-120b"
 ):
-
     if not api_key:
-        raise ValueError("API key missing")
+        raise ValueError("Groq API key is missing")
 
     background = retrieve_content(
         question,
@@ -152,34 +139,26 @@ def ask_rag(
         return "Information Missing"
 
     prompt = f"""
-You are a professional AI Assistant.
+    Answer the question using only the information given below.
 
-Answer the user's question using ONLY
-the document background below.
+    If the answer is not available in the documents,
+    reply exactly: Information Missing.
 
-Do not invent or assume facts.
+    Do not make assumptions.
 
-If information is not available,
-simply say "Information Missing".
+    Documents:
+    {background}
 
-Document Background:
-{background}
-
-User Question:
-{question}
-
-Answer:
-"""
+    Question:
+    {question}
+    """
 
     client = Groq(api_key=api_key)
 
     response = client.chat.completions.create(
         model=model_name,
         messages=[
-            {
-                "role": "user",
-                "content": prompt
-            }
+            {"role": "user", "content": prompt}
         ],
         temperature=0.3
     )
